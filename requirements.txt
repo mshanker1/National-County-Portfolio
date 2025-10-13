@@ -1,0 +1,19 @@
+# Core Data Processing
+pandas>=1.5.0
+numpy>=1.21.0
+
+# Data Visualization (for radar chart)
+plotly>=5.0.0
+dash>=2.0.0
+
+# Optional but recommended for development
+jupyter>=1.0.0
+ipython>=7.0.0
+
+# For potential future enhancements
+scipy>=1.9.0
+
+scikit-learn>=1.1.0
+
+# Required for Production Deployment
+gunicorn>=20.0.4
