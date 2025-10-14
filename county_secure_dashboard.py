@@ -3391,9 +3391,9 @@ def create_sector_based_radar_chart_original_enhanced(county_data, county_name):
         return go.Figure()
     
     categories_config = {
-        'Society': {'color': '#2563EB', 'label': 'Society', 'start_angle': 90, 'end_angle': 210},
-        'Environment': {'color': '#059669', 'label': 'Environment', 'start_angle': 210, 'end_angle': 330}, 
-        'Economy': {'color': '#DC2626', 'label': 'Economy', 'start_angle': 330, 'end_angle': 450}
+        'people': {'color': '#2563EB', 'label': 'PEOPLE', 'start_angle': 0, 'end_angle': 120},
+        'prosperity': {'color': '#DC2626', 'label': 'PROSPERITY', 'start_angle': 120, 'end_angle': 240}, 
+        'planet': {'color': '#059669', 'label': 'PLANET', 'start_angle': 240, 'end_angle': 360}
     }
     
     fig = go.Figure()
