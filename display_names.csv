@@ -9,21 +9,21 @@ Environment,Enviornment,top_level
 Economy,Economy,top_level
 ,,
 # SUB_MEASURE MAPPINGS,,
-Society_Community,Community,sub_measure
-Society_Education,Education,sub_measure
 Society_Health,Health,sub_measure
 Society_ArtsAndCulture,Arts and Culture,sub_measure
+Society_Community,Community,sub_measure
+Society_Education,Education,sub_measure
 Society_Wealth,Wealth,sub_measure
-Environment_BuiltEnvironment,Built Environment,sub_measure
-Environment_Biodiversity,Biodiversity,sub_measure
-Environment_ClimateAndResilience,Climate and Resilience,sub_measure
-Environment_FoodAndAgricultureSystems,Food and Agriculture Systems,sub_measure
-Environment_LandAirWater,"Land, Air, Water",sub_measure
-Economy_Business,Business,sub_measure
 Economy_Employment,Employment,sub_measure
-Economy_Energy,Energy,sub_measure
 Economy_Nonprofit,Nonprofit,sub_measure
+Economy_Business,Business,sub_measure
 Economy_Government,Government,sub_measure
+Economy_Energy,Energy,sub_measure
+Environment_BuiltEnvironment,Built Environment,sub_measure
+Environment_ClimateAndResilience,Climate and Resilience,sub_measure
+Environment_LandAirWater,"Land,Air, and Water",sub_measure
+Environment_Biodiversity,Biodiversity,sub_measure
+Environment_FoodAndAgricultureSystems,Food and Agriculture Systems,sub_measure
 ,,
 # METRIC_GROUP MAPPINGS,,
 ,,
