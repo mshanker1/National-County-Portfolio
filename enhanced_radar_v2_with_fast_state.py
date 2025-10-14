@@ -10,7 +10,7 @@ class RadarChartDataProviderV2:
     Enhanced data provider with human-readable names and state-level comparison support
     """
     
-    def __init__(self, db_file_path='sustainability_data.db', display_names_file='display_names.csv'):#Need to change display_names.csv to new csv file name 
+    def __init__(self, db_file_path='sustainability_data.db', display_names_file='display_names.csv'):
         self.db_file_path = db_file_path
         self.display_names_file = display_names_file
         self.display_names_map = {}
@@ -236,13 +236,13 @@ class RadarChartDataProviderV2:
                 county_fips = county_row['fips']
                 
                 # Calculate state-level sub-measure scores
-                for top_level in ['Society', 'Economy', 'Environment']: #Changed People to Society as per new csv file
+                for top_level in ['People', 'Prosperity', 'Planet']:
                     submeasures_query = """
                         SELECT DISTINCT 
                             CASE 
-                                WHEN rm.top_level = 'Society' THEN 'Society_' || rm.sub_measure
-                                WHEN rm.top_level = 'Economy' THEN 'Economy_' || rm.sub_measure  
-                                WHEN rm.top_level = 'Environment' THEN 'Environment_' || rm.sub_measure
+                                WHEN rm.top_level = 'People' THEN 'People_' || rm.sub_measure
+                                WHEN rm.top_level = 'Prosperity' THEN 'Prosperity_' || rm.sub_measure  
+                                WHEN rm.top_level = 'Planet' THEN 'Planet_' || rm.sub_measure
                             END as measure_name,
                             rm.sub_measure
                         FROM raw_metrics rm
@@ -336,9 +336,9 @@ class RadarChartDataProviderV2:
                     parent_measure as top_level,
                     measure_name,
                     CASE 
-                        WHEN parent_measure = 'Society' THEN REPLACE(measure_name, 'Society_', '') -- Changed Society to Society as per new csv file
-                        WHEN parent_measure = 'Economy' THEN REPLACE(measure_name, 'Economy_', '')
-                        WHEN parent_measure = 'Environment' THEN REPLACE(measure_name, 'Environment_', '')
+                        WHEN parent_measure = 'People' THEN REPLACE(measure_name, 'People_', '')
+                        WHEN parent_measure = 'Prosperity' THEN REPLACE(measure_name, 'Prosperity_', '')
+                        WHEN parent_measure = 'Planet' THEN REPLACE(measure_name, 'Planet_', '')
                     END as sub_measure,
                     state_percentile_rank as percentile_rank,
                     normalized_score,
@@ -348,7 +348,6 @@ class RadarChartDataProviderV2:
                 WHERE fips = ? 
                 AND measure_level = 'sub_measure'
                 AND state_percentile_rank IS NOT NULL
-                AND measure_name NOT LIKE '%Population%'
                 ORDER BY parent_measure, measure_name
             """
             
@@ -361,9 +360,9 @@ class RadarChartDataProviderV2:
                     parent_measure as top_level,
                     measure_name,
                     CASE 
-                        WHEN parent_measure = 'Society' THEN REPLACE(measure_name, 'Society_', '') -- Changed Society to Society as per new csv file
-                        WHEN parent_measure = 'Economy' THEN REPLACE(measure_name, 'Economy_', '')
-                        WHEN parent_measure = 'Environment' THEN REPLACE(measure_name, 'Environment_', '')
+                        WHEN parent_measure = 'People' THEN REPLACE(measure_name, 'People_', '')
+                        WHEN parent_measure = 'Prosperity' THEN REPLACE(measure_name, 'Prosperity_', '')
+                        WHEN parent_measure = 'Planet' THEN REPLACE(measure_name, 'Planet_', '')
                     END as sub_measure,
                     percentile_rank,
                     normalized_score,
@@ -373,7 +372,6 @@ class RadarChartDataProviderV2:
                 WHERE fips = ? 
                 AND measure_level = 'sub_measure'
                 AND normalized_score IS NOT NULL
-                AND measure_name NOT LIKE '%Population%'
                 ORDER BY parent_measure, measure_name
             """
             
@@ -381,16 +379,16 @@ class RadarChartDataProviderV2:
         
         # Structure data in the format expected by radar chart
         structured_data = {
-            'Society': {},    #Changed Society to Society as per new csv file
-            'Economy': {},   
-            'Environment': {}     
+            'people': {},    
+            'prosperity': {},   
+            'planet': {}     
         }
         
         # Map the data to the expected structure
         top_level_mapping = {
-            'Society': 'Society',#Changed Society to Society as per new csv file
-            'Economy': 'Economy', 
-            'Environment': 'Environment'
+            'People': 'people',
+            'Prosperity': 'prosperity', 
+            'Planet': 'planet'
         }
         
         for _, row in submeasures_df.iterrows():
@@ -424,9 +422,9 @@ class RadarChartDataProviderV2:
         
         # Convert display names back to database names
         top_level_mapping = {
-            'Society': 'Society', #Changed Society to Society as per new csv file
-            'Economy': 'Economy',
-            'Environment': 'Environment'
+            'people': 'People',
+            'prosperity': 'Prosperity',
+            'planet': 'Planet'
         }
         
         db_top_level = top_level_mapping.get(top_level.lower(), top_level)
@@ -629,9 +627,9 @@ class RadarChartDataProviderV2:
                     parent_measure as top_level,
                     measure_name,
                     CASE 
-                        WHEN parent_measure = 'Society' THEN REPLACE(measure_name, 'Society_', '') -- Changed Society to Society as per new csv file
-                        WHEN parent_measure = 'Economy' THEN REPLACE(measure_name, 'Economy_', '')
-                        WHEN parent_measure = 'Environment' THEN REPLACE(measure_name, 'Environment_', '')
+                        WHEN parent_measure = 'People' THEN REPLACE(measure_name, 'People_', '')
+                        WHEN parent_measure = 'Prosperity' THEN REPLACE(measure_name, 'Prosperity_', '')
+                        WHEN parent_measure = 'Planet' THEN REPLACE(measure_name, 'Planet_', '')
                     END as sub_measure,
                     percentile_rank as national_percentile,
                     normalized_score,
@@ -641,7 +639,6 @@ class RadarChartDataProviderV2:
                 WHERE fips = ? 
                 AND measure_level = 'sub_measure'
                 AND normalized_score IS NOT NULL
-                AND measure_name NOT LIKE '%Population%'
                 ORDER BY parent_measure, measure_name
             """
             
@@ -662,9 +659,9 @@ class RadarChartDataProviderV2:
                     parent_measure as top_level,
                     measure_name,
                     CASE 
-                        WHEN parent_measure = 'Society' THEN REPLACE(measure_name, 'Society_', '')-- Changed Society to Society as per new csv file
-                        WHEN parent_measure = 'Economy' THEN REPLACE(measure_name, 'Economy_', '')
-                        WHEN parent_measure = 'Environment' THEN REPLACE(measure_name, 'Environment_', '')
+                        WHEN parent_measure = 'People' THEN REPLACE(measure_name, 'People_', '')
+                        WHEN parent_measure = 'Prosperity' THEN REPLACE(measure_name, 'Prosperity_', '')
+                        WHEN parent_measure = 'Planet' THEN REPLACE(measure_name, 'Planet_', '')
                     END as sub_measure,
                     percentile_rank,
                     normalized_score,
@@ -674,7 +671,6 @@ class RadarChartDataProviderV2:
                 WHERE fips = ? 
                 AND measure_level = 'sub_measure'
                 AND normalized_score IS NOT NULL
-                AND measure_name NOT LIKE '%Population%'
                 ORDER BY parent_measure, measure_name
             """
             
@@ -682,16 +678,16 @@ class RadarChartDataProviderV2:
         
         # Structure data in the format expected by radar chart
         structured_data = {
-            'Society': {},    #Changed Society to Society as per new csv file
-            'Economy': {},   
-            'Environment': {}     
+            'people': {},    
+            'prosperity': {},   
+            'planet': {}     
         }
         
         # Map the data to the expected structure
         top_level_mapping = {
-            'Society': 'Society', #Changed Society to Society as per new csv file
-            'Economy': 'Economy', 
-            'Environment': 'Environment'
+            'People': 'people',
+            'Prosperity': 'prosperity', 
+            'Planet': 'planet'
         }
         
         for _, row in submeasures_df.iterrows():
@@ -728,9 +724,9 @@ class RadarChartDataProviderV2:
         
         # Convert display names back to database names
         top_level_mapping = {
-            'Society': 'Society', #Changed Society to Society as per new csv file
-            'Economy': 'Economy',
-            'Environment': 'Environment'
+            'people': 'People',
+            'prosperity': 'Prosperity',
+            'planet': 'Planet'
         }
         
         db_top_level = top_level_mapping.get(top_level.lower(), top_level)
@@ -839,75 +835,18 @@ def create_enhanced_radar_chart_with_units_v2(county_data, county_name, data_pro
     """Enhanced radar chart with display names and comparison mode"""
     import plotly.graph_objects as go
     import math
-    import os
     
     if not county_data:
         return go.Figure()
     
     # Define categories with colors and sector assignments
     categories_config = {
-        'Society': {'color': '#2563EB', 'label': 'Society', 'start_angle': 90, 'end_angle': 210},
-        'Environment': {'color': '#059669', 'label': 'Environment', 'start_angle': 210, 'end_angle': 330}, 
-        'Economy': {'color': '#DC2626', 'label': 'Economy', 'start_angle': 330, 'end_angle': 450}
+        'people': {'color': '#2563EB', 'label': 'PEOPLE', 'start_angle': 0, 'end_angle': 120},
+        'prosperity': {'color': '#DC2626', 'label': 'PROSPERITY', 'start_angle': 120, 'end_angle': 240}, 
+        'planet': {'color': '#059669', 'label': 'PLANET', 'start_angle': 240, 'end_angle': 360}
     }
     
     fig = go.Figure()
-    
-    # Try to load SVG as background - CORRECTED PATH
-    svg_loaded = False
-    try:
-        # Try multiple possible locations for the SVG file
-        possible_paths = [
-            'assets/custom_visual.svg',
-            'custom_visual.svg',
-            '../assets/custom_visual.svg',
-        ]
-        
-        svg_content = None
-        svg_path_used = None
-        
-        for svg_path in possible_paths:
-            if os.path.exists(svg_path):
-                with open(svg_path, 'r', encoding='utf-8') as svg_file:
-                    svg_content = svg_file.read()
-                svg_path_used = svg_path
-                break
-        
-        if svg_content:
-            import base64
-            # Convert SVG to base64 for embedding
-            svg_base64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
-            svg_data_url = f"data:image/svg+xml;base64,{svg_base64}"
-            
-            # Add SVG as background image with BETTER VISIBILITY
-            fig.add_layout_image(
-                dict(
-                    source=svg_data_url,
-                    xref="paper",
-                    yref="paper",
-                    x=0.5,
-                    y=0.5,
-                    sizex=1.0,
-                    sizey=1.0,
-                    xanchor="center",
-                    yanchor="middle",
-                    opacity=0.6,
-                    layer="below",
-                    sizing="contain"
-                )
-            )
-            svg_loaded = True
-            print(f"✅ SVG background loaded successfully from: {svg_path_used}")
-            print(f"   Opacity: 0.6 (60% visible)")
-        else:
-            print(f"⚠️ SVG file not found in any of these locations:")
-            for path in possible_paths:
-                print(f"   - {os.path.abspath(path)}")
-    except Exception as e:
-        print(f"⚠️ Error loading SVG background: {e}")
-    
-    if not svg_loaded:
-        print("💡 Continuing without SVG background...")
     
     # Process each category separately
     all_theta = []
@@ -917,7 +856,7 @@ def create_enhanced_radar_chart_with_units_v2(county_data, county_name, data_pro
     all_customdata = []
     all_labels = []
     
-    for category in ['Society', 'Economy', 'Environment']:
+    for category in ['people', 'prosperity', 'planet']:
         if category in county_data and county_data[category]:
             config = categories_config[category]
             sub_categories = list(county_data[category].keys())
@@ -994,7 +933,7 @@ def create_enhanced_radar_chart_with_units_v2(county_data, county_name, data_pro
         mode='markers+lines'
     ))
     
-    # Add labels and other elements
+    # Add labels and other elements (same as before)
     for i, (theta, r, label, color) in enumerate(zip(all_theta, all_r, all_labels, all_colors)):
         angle_rad = math.radians(theta)
         label_r = min(r + 10, 95)
@@ -1009,7 +948,7 @@ def create_enhanced_radar_chart_with_units_v2(county_data, county_name, data_pro
             hoverinfo='skip'
         ))
     
-    # Add sector styling
+    # Add sector styling (same as before)
     for category, config in categories_config.items():
         # Sector arcs
         arc_angles = list(range(int(config['start_angle']), int(config['end_angle']) + 1, 2))
@@ -1022,7 +961,7 @@ def create_enhanced_radar_chart_with_units_v2(county_data, county_name, data_pro
         ))
         
         # Sector boundaries and labels
-        if category == 'Society':
+        if category == 'people':
             fig.add_trace(go.Scatterpolar(
                 r=[0, 105], theta=[0, 0], mode='lines',
                 line=dict(color=config['color'], width=2, dash='dot'),
@@ -1058,12 +997,11 @@ def create_enhanced_radar_chart_with_units_v2(county_data, county_name, data_pro
     if data_provider.comparison_mode == 'state':
         speed_indicator = " ⚡" if data_provider.stage >= 3 else " ⏳"
     
-    svg_indicator = " 🎨" if svg_loaded else ""
-    main_title = f"<b>{county_name} Sustainability Dashboard</b><br><sub>Percentile Rankings vs. {comparison_context}{speed_indicator}{svg_indicator} • Click sub-measures for details</sub>"
+    main_title = f"<b>{county_name} Sustainability Dashboard</b><br><sub>Percentile Rankings vs. {comparison_context}{speed_indicator} • Click sub-measures for details</sub>"
     
     fig.update_layout(
         polar=dict(
-            bgcolor='rgba(255,255,255,0.4)' if svg_loaded else 'white',
+            bgcolor='white',
             radialaxis=dict(
                 visible=True, range=[0, 120],
                 tickfont=dict(size=12, color='#374151'),
@@ -1088,8 +1026,8 @@ def create_enhanced_radar_chart_with_units_v2(county_data, county_name, data_pro
         ),
         height=700,
         margin=dict(t=120, b=100, l=100, r=100),
-        paper_bgcolor='rgba(255,255,255,0.4)' if svg_loaded else 'white',
-        plot_bgcolor='rgba(255,255,255,0.4)' if svg_loaded else 'white'
+        paper_bgcolor='white', 
+        plot_bgcolor='white'
     )
     
     return fig
@@ -1299,11 +1237,11 @@ if __name__ == "__main__":
                 print(f"\n✅ State comparisons are optimized!")
             
             # Test drill-down with display names
-            if structured_data.get('Society'):
-                first_submeasure = list(structured_data['Society'].keys())[0]
+            if structured_data.get('people'):
+                first_submeasure = list(structured_data['people'].keys())[0]
                 print(f"\n🔍 Testing drill-down for '{first_submeasure}':")
                 
-                details = provider.get_submetric_details(sample_fips, 'Society', first_submeasure)
+                details = provider.get_submetric_details(sample_fips, 'people', first_submeasure)
                 if not details.empty:
                     print(f"   Found {len(details)} metrics")
                     for _, row in details.head(3).iterrows():
