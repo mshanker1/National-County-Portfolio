@@ -1,5 +1,5 @@
 import pandas as pd
-from google.cloud import bigquery
+import snowflake.connector
 import numpy as np
 from scipy import stats
 import os
@@ -7,26 +7,31 @@ import time
 import warnings
 warnings.filterwarnings('ignore', category=UserWarning, message='pandas only supports SQLAlchemy')
 
-class BigQueryRadarChartDataProvider:
+class SnowflakeRadarChartDataProvider:
     """
-    Enhanced data provider for BigQuery with human-readable names and state-level comparison support
+    Enhanced data provider for Snowflake with human-readable names and state-level comparison support
     """
     
-    def __init__(self, project_id, dataset_id, display_names_file='display_names.csv'):
+    def __init__(self, connection_params, display_names_file='display_names.csv'):
         """
-        Initialize with BigQuery connection parameters
+        Initialize with Snowflake connection parameters
         
-        Example:
-        project_id = 'county-dashboard'
-        dataset_id = 'sustainability_data'
+        connection_params example:
+        {
+            'user': 'mabel10',
+            'password': 'Abvin!123456789',
+            'account': 'wthggzd-ah61676',
+            'warehouse': 'COMPUTE_WH',
+            'database': 'SUSTAINABILITY_DB',
+            'schema': 'PUBLIC'
+        }
         """
-        self.project_id = project_id
-        self.dataset_id = dataset_id
+        self.connection_params = connection_params
         self.display_names_file = display_names_file
         self.display_names_map = {}
         self.comparison_mode = 'national'  # 'national' or 'state'
         self.current_state = None
-        self.client = None
+        self.conn = None
         self._load_display_names()
         self._check_database_status()
     
@@ -48,28 +53,30 @@ class BigQueryRadarChartDataProvider:
         return self.display_names_map.get(database_name, database_name)
     
     def get_connection(self):
-        """Get BigQuery connection"""
-        if self.client is None:
-            self.client = bigquery.Client(project=self.project_id)
-        return self.client
+        """Get Snowflake connection"""
+        if self.conn is None or self.conn.is_closed():
+            self.conn = snowflake.connector.connect(**self.connection_params)
+        return self.conn
     
     def _check_database_status(self):
         """Check what stage the database is in"""
         try:
-            client = self.get_connection()
+            conn = self.get_connection()
+            cursor = conn.cursor()
             
             # Get all tables
-            tables_query = f"""
-                SELECT table_name 
-                FROM `{self.project_id}.{self.dataset_id}.INFORMATION_SCHEMA.TABLES`
-            """
-            tables_df = client.query(tables_query).to_dataframe()
-            tables = tables_df['table_name'].tolist()
+            cursor.execute("""
+                SELECT TABLE_NAME 
+                FROM INFORMATION_SCHEMA.TABLES 
+                WHERE TABLE_SCHEMA = %s
+            """, [self.connection_params['schema']])
+            
+            tables = [row[0] for row in cursor.fetchall()]
             
             # Check for state comparison tables
-            has_state_tables = 'state_percentiles' in tables and 'state_aggregated_scores' in tables
+            has_state_tables = 'STATE_PERCENTILES' in tables and 'STATE_AGGREGATED_SCORES' in tables
             
-            if 'aggregated_scores' in tables and 'normalized_metrics' in tables:
+            if 'AGGREGATED_SCORES' in tables and 'NORMALIZED_METRICS' in tables:
                 if has_state_tables:
                     self.stage = 3  # Fast state comparisons available
                     print("✅ Database Status: Stage 3 Complete (Fast state comparisons available)")
@@ -77,7 +84,7 @@ class BigQueryRadarChartDataProvider:
                     self.stage = 2
                     print("✅ Database Status: Stage 2 Complete (Normalized data available)")
                     print("💡 Run create_state_percentiles_table() for instant state comparisons")
-            elif 'raw_metrics' in tables and 'counties' in tables:
+            elif 'RAW_METRICS' in tables and 'COUNTIES' in tables:
                 self.stage = 1
                 print("⚠️  Database Status: Stage 1 Complete (Raw data only - run Stage 2 for normalization)")
             else:
@@ -101,114 +108,105 @@ class BigQueryRadarChartDataProvider:
     
     def get_all_counties(self):
         """Get list of all counties for dropdown"""
-        client = self.get_connection()
+        conn = self.get_connection()
         
-        counties_query = f"""
+        counties_df = pd.read_sql("""
             SELECT 
-                c.fips as fips_code,
-                c.county as county_name,
-                c.state as state_code,
-                c.state as state_name,
-                COUNT(a.measure_name) as data_completeness
-            FROM `{self.project_id}.{self.dataset_id}.counties` c
-            LEFT JOIN `{self.project_id}.{self.dataset_id}.aggregated_scores` a 
-                ON c.fips = a.fips 
-                AND a.measure_level = 'sub_measure' 
-                AND a.normalized_score IS NOT NULL
-            GROUP BY c.fips, c.county, c.state
-            HAVING data_completeness >= 8
-            ORDER BY c.state, c.county
-        """
-        
-        counties_df = client.query(counties_query).to_dataframe()
+                c.FIPS as FIPS_CODE,
+                c.COUNTY as COUNTY_NAME,
+                c.STATE as STATE_CODE,
+                c.STATE as STATE_NAME,
+                COUNT(a.MEASURE_NAME) as DATA_COMPLETENESS
+            FROM COUNTIES c
+            LEFT JOIN aggregated_scores a ON c.FIPS = a.FIPS 
+                AND a.MEASURE_LEVEL = 'sub_measure' 
+                AND a.NORMALIZED_SCORE IS NOT NULL
+            GROUP BY c.FIPS, c.COUNTY, c.STATE
+            HAVING DATA_COMPLETENESS >= 8
+            ORDER BY c.STATE, c.COUNTY
+        """, conn)
         
         return counties_df
     
     def get_county_metrics(self, county_fips):
         """Get structured metrics for a county"""
-        client = self.get_connection()
+        conn = self.get_connection()
         
         # Get county information
-        county_info_query = f"""
+        county_info = pd.read_sql("""
             SELECT 
-                county as county_name,
-                state as state_code,
-                state as state_name
-            FROM `{self.project_id}.{self.dataset_id}.counties`
-            WHERE fips = '{county_fips}'
-        """
-        
-        county_info = client.query(county_info_query).to_dataframe()
+                COUNTY as COUNTY_NAME,
+                STATE as STATE_CODE,
+                STATE as STATE_NAME
+            FROM COUNTIES 
+            WHERE FIPS = %s
+        """, conn, params=[county_fips])
         
         if county_info.empty:
             return pd.DataFrame(), {}
         
         # Use national percentiles (state comparison would require Stage 3)
-        # NOTE: Database still uses old names (People/Productivity/Place)
-        # We map them to new display names (Society/Economy/Environment)
-        submeasures_query = f"""
+        submeasures_query = """
             SELECT 
-                parent_measure as top_level,
-                measure_name,
+                PARENT_MEASURE as TOP_LEVEL,
+                MEASURE_NAME,
                 CASE 
-                    WHEN parent_measure = 'People' THEN REPLACE(measure_name, 'People_', '')
-                    WHEN parent_measure = 'Productivity' THEN REPLACE(measure_name, 'Productivity_', '')
-                    WHEN parent_measure = 'Place' THEN REPLACE(measure_name, 'Place_', '')
-                END as sub_measure,
-                percentile_rank,
-                normalized_score,
-                component_count,
-                completeness_ratio
-            FROM `{self.project_id}.{self.dataset_id}.aggregated_scores`
-            WHERE fips = '{county_fips}'
-            AND measure_level = 'sub_measure'
-            AND normalized_score IS NOT NULL
-            AND measure_name NOT LIKE '%Population%'
-            ORDER BY parent_measure, measure_name
+                    WHEN PARENT_MEASURE = 'People' THEN REPLACE(MEASURE_NAME, 'People_', '')
+                    WHEN PARENT_MEASURE = 'Productivity' THEN REPLACE(MEASURE_NAME, 'Productivity_', '')
+                    WHEN PARENT_MEASURE = 'Place' THEN REPLACE(MEASURE_NAME, 'Place_', '')
+                END as SUB_MEASURE,
+                PERCENTILE_RANK,
+                NORMALIZED_SCORE,
+                COMPONENT_COUNT,
+                COMPLETENESS_RATIO
+            FROM aggregated_scores
+            WHERE FIPS = %s 
+            AND MEASURE_LEVEL = 'sub_measure'
+            AND NORMALIZED_SCORE IS NOT NULL
+            AND MEASURE_NAME NOT LIKE '%%Population%%'
+            ORDER BY PARENT_MEASURE, MEASURE_NAME
         """
         
-        submeasures_df = client.query(submeasures_query).to_dataframe()
+        submeasures_df = pd.read_sql(submeasures_query, conn, params=[county_fips])
         
         # Structure data in the format expected by radar chart
-        # Using NEW names for the dashboard
         structured_data = {
-            'Society': {},      # Maps from 'People'
-            'Economy': {},      # Maps from 'Productivity'
-            'Environment': {}   # Maps from 'Place'
+            'People': {},
+            'Productivity': {},
+            'Place': {}
         }
         
-        # Map the OLD database names to NEW display names
+        # Map the data to the expected structure
         top_level_mapping = {
-            'People': 'Society',
-            'Productivity': 'Economy',
-            'Place': 'Environment'
+            'People': 'People',
+            'Productivity': 'Productivity',
+            'Place': 'Place'
         }
         
         for _, row in submeasures_df.iterrows():
-            top_level_key = top_level_mapping.get(row['top_level'])
+            top_level_key = top_level_mapping.get(row['TOP_LEVEL'])
             if top_level_key:
                 # Use human-readable name if available
-                sub_measure_key = row['sub_measure']
-                display_key = self.get_display_name(row['measure_name'])
+                sub_measure_key = row['SUB_MEASURE']
+                display_key = self.get_display_name(row['MEASURE_NAME'])
                 
                 # Extract just the sub-measure part from display name
-                if display_key != row['measure_name']:
-                    structured_data[top_level_key][display_key] = row['percentile_rank']
+                if display_key != row['MEASURE_NAME']:
+                    structured_data[top_level_key][display_key] = row['PERCENTILE_RANK']
                 else:
-                    structured_data[top_level_key][sub_measure_key] = row['percentile_rank']
+                    structured_data[top_level_key][sub_measure_key] = row['PERCENTILE_RANK']
         
         return county_info, structured_data
     
     def get_submetric_details(self, county_fips, top_level, sub_category):
         """Get detailed metrics for drill-down"""
-        client = self.get_connection()
+        conn = self.get_connection()
         
         # Convert display names back to database names
-        # NEW display names -> OLD database names
         top_level_mapping = {
-            'society': 'People',
-            'economy': 'Productivity',
-            'environment': 'Place'
+            'people': 'People',
+            'productivity': 'Productivity',
+            'place': 'Place'
         }
         
         db_top_level = top_level_mapping.get(top_level.lower(), top_level)
@@ -224,37 +222,36 @@ class BigQueryRadarChartDataProvider:
                     break
         
         # Get metrics with national percentiles
-        details_query = f"""
+        details_query = """
             SELECT 
-                rm.metric_name,
-                nm.raw_value as metric_value,
-                nm.percentile_rank,
-                ms.is_reverse_metric
-            FROM `{self.project_id}.{self.dataset_id}.normalized_metrics` nm
-            JOIN `{self.project_id}.{self.dataset_id}.raw_metrics` rm 
-                ON nm.fips = rm.fips AND nm.metric_name = rm.metric_name
-            LEFT JOIN `{self.project_id}.{self.dataset_id}.metric_statistics` ms 
-                ON nm.metric_name = ms.metric_name
-            WHERE nm.fips = '{county_fips}' 
-            AND UPPER(rm.top_level) = UPPER('{db_top_level}')
-            AND UPPER(rm.sub_measure) = UPPER('{db_sub_category}')
-            AND nm.is_missing = FALSE
-            ORDER BY nm.percentile_rank DESC
+                rm.METRIC_NAME,
+                nm.RAW_VALUE as METRIC_VALUE,
+                nm.PERCENTILE_RANK,
+                ms.IS_REVERSE_METRIC
+            FROM normalized_metrics nm
+            JOIN RAW_METRICS rm ON nm.FIPS = rm.FIPS AND nm.METRIC_NAME = rm.METRIC_NAME
+            LEFT JOIN metric_statistics ms ON nm.METRIC_NAME = ms.METRIC_NAME
+            WHERE nm.FIPS = %s 
+            AND UPPER(rm.TOP_LEVEL) = UPPER(%s)
+            AND UPPER(rm.SUB_MEASURE) = UPPER(%s)
+            AND nm.IS_MISSING = FALSE
+            ORDER BY nm.PERCENTILE_RANK DESC
         """
         
-        details_df = client.query(details_query).to_dataframe()
+        details_df = pd.read_sql(details_query, conn, 
+                               params=[county_fips, db_top_level, db_sub_category])
         
         # Add human-readable display names
         if not details_df.empty:
             display_names = []
             for _, row in details_df.iterrows():
-                display_name = self.get_display_name(row['metric_name'])
-                if display_name == row['metric_name']:
+                display_name = self.get_display_name(row['METRIC_NAME'])
+                if display_name == row['METRIC_NAME']:
                     # Use metric name formatted nicely
-                    display_name = row['metric_name'].replace('_', ' ').title()
+                    display_name = row['METRIC_NAME'].replace('_', ' ').title()
                 display_names.append(display_name)
             
-            details_df['display_name'] = display_names
+            details_df['DISPLAY_NAME'] = display_names
         
         return details_df
 
@@ -274,18 +271,18 @@ def get_performance_label(percentile, comparison_mode='national'):
         return f"Needs Improvement (Bottom 25% {context})"
 
 def create_enhanced_radar_chart(county_data, county_name, data_provider, county_fips):
-    """Enhanced radar chart aligned PERFECTLY with SVG - MATCHING SQLite V2 STYLING"""
+    """Create enhanced radar chart for Snowflake data with SVG background"""
     import plotly.graph_objects as go
     import base64
     
     if not county_data:
         return go.Figure()
     
-    # Define categories with SQLite V2 colors
+    # Define categories
     categories_config = {
-        'Society': {'color': '#6B7FD7', 'label': 'Society', 'start_angle': 150, 'end_angle': 270},  # Purple
-        'Economy': {'color': '#D4AF37', 'label': 'Economy', 'start_angle': 270, 'end_angle': 390},  # Gold
-        'Environment': {'color': '#4ECDC4', 'label': 'Environment', 'start_angle': 30, 'end_angle': 150}  # Teal
+        'People': {'color': '#5760a6', 'label': 'People', 'start_angle': 150, 'end_angle': 270},
+        'Productivity': {'color': '#c0b265', 'label': 'Productivity', 'start_angle': 270, 'end_angle': 390},
+        'Place': {'color': "#588f57", 'label': 'Place', 'start_angle': 30, 'end_angle': 150}
     }
     
     fig = go.Figure()
@@ -348,47 +345,12 @@ def create_enhanced_radar_chart(county_data, county_name, data_provider, county_
     all_customdata = []
     all_labels = []
     
-    # Define EXACT order for each category (CLOCKWISE from start of sector)
-    sector_orders = {
-        'Society': ['Health', 'Arts and Culture', 'Community', 'Education', 'Wealth'],
-        'Environment': ['Built Environment', 'Climate and Resilience', 'Land, Air, Water', 'Biodiversity', 'Food and Agriculture Systems'],
-        'Economy': ['Employment', 'Nonprofit', 'Business', 'Government', 'Energy']
-    }
-    
-    # Process in order: Society → Economy → Environment for smooth polygon flow
-    for category in ['Society', 'Economy', 'Environment']:
+    for category in ['People', 'Productivity', 'Place']:
         if category in county_data and county_data[category]:
             config = categories_config[category]
             
-            # Get the correct order for this category
-            correct_order = sector_orders.get(category, [])
-            
-            # Match data to correct order
-            ordered_sub_categories = []
-            ordered_values = []
-            
-            for correct_name in correct_order:
-                # Try to find matching data
-                found = False
-                for sub_cat, value in county_data[category].items():
-                    # Flexible matching (handles variations in naming)
-                    sub_cat_clean = sub_cat.lower().replace(' ', '').replace(',', '').replace('&', 'and')
-                    correct_name_clean = correct_name.lower().replace(' ', '').replace(',', '').replace('&', 'and')
-                    
-                    if (correct_name_clean in sub_cat_clean or 
-                        sub_cat_clean in correct_name_clean or
-                        correct_name_clean == sub_cat_clean):
-                        ordered_sub_categories.append(sub_cat)
-                        ordered_values.append(value)
-                        found = True
-                        break
-                
-                # If not found but expected, skip this position
-                if not found:
-                    continue
-            
-            sub_categories = ordered_sub_categories
-            values = ordered_values
+            sub_categories = list(county_data[category].keys())
+            values = list(county_data[category].values())
             
             # Calculate angles for this sector
             n_metrics = len(sub_categories)
@@ -403,7 +365,7 @@ def create_enhanced_radar_chart(county_data, county_name, data_provider, county_
                     step = effective_span / (n_metrics - 1)
                     angles = [(config['start_angle'] + padding + i * step) % 360 for i in range(n_metrics)]
                 
-                # Add to overall data with enhanced hover info
+                # Add to overall data
                 for i, (sub_cat, value, angle) in enumerate(zip(sub_categories, values, angles)):
                     hover_detail = ""
                     try:
@@ -412,8 +374,8 @@ def create_enhanced_radar_chart(county_data, county_name, data_provider, county_
                             top_metrics = sample_details.head(2)
                             metrics_list = []
                             for _, row in top_metrics.iterrows():
-                                display_name = row.get('display_name', row['metric_name'])
-                                metric_text = f"• {display_name}: {row['metric_value']:.1f} ({row['percentile_rank']:.0f}%)"
+                                display_name = row.get('DISPLAY_NAME', row['METRIC_NAME'])
+                                metric_text = f"• {display_name}: {row['METRIC_VALUE']:.1f} ({row['PERCENTILE_RANK']:.0f}%)"
                                 metrics_list.append(metric_text)
                             
                             metrics_text = "<br>".join(metrics_list)
@@ -438,12 +400,6 @@ def create_enhanced_radar_chart(county_data, county_name, data_provider, county_
                     all_hover.append(hover_detail_text)
                     all_customdata.append([category, sub_cat])
                     all_labels.append(sub_cat)
-    
-    # Debug: Print what we're plotting
-    print(f"\n🔍 Plotting {len(all_r)} data points:")
-    print(f"   R values (first 5): {all_r[:5]}")
-    print(f"   Theta values (first 5): {all_theta[:5]}")
-    print(f"   Labels (first 5): {all_labels[:5]}")
     
     # Create the main radar trace
     fig.add_trace(go.Scatterpolar(
@@ -471,44 +427,32 @@ def create_enhanced_radar_chart(county_data, county_name, data_provider, county_
         customdata=all_customdata
     ))
     
-    # Update layout with SQLite V2 styling
+    # Update layout
     comparison_context = "All US Counties" if data_provider.comparison_mode == 'national' else f"{data_provider.current_state} Counties"
-    speed_indicator = ""
-    if data_provider.comparison_mode == 'state':
-        speed_indicator = " ⚡" if data_provider.stage >= 3 else " ⏳"
-    
     svg_indicator = " 🎨" if svg_loaded else ""
-    main_title = f"<b>{county_name} Sustainability Dashboard</b><br><sub>Percentile Rankings vs. {comparison_context}{speed_indicator}{svg_indicator} • Click sub-measures for details</sub>"
+    main_title = f"<b>{county_name} Sustainability Dashboard</b><br><sub>Percentile Rankings vs. {comparison_context}{svg_indicator} • Click sub-measures for details</sub>"
     
     fig.update_layout(
         polar=dict(
             bgcolor='rgba(255,255,255,0)' if svg_loaded else 'white',
             radialaxis=dict(
-                visible=True, 
-                range=[0, 120],
-                angle=90,
+                visible=True,
+                range=[0, 100],
                 tickfont=dict(size=12, color='#374151'),
-                gridcolor='rgba(200,200,200,0.2)',
-                tickmode='linear', 
-                tick0=0, 
-                dtick=20,
-                tickvals=[0, 20, 40, 60, 80, 100],
-                ticktext=['0th', '20th', '40th', '60th', '80th', '100th']
+                gridcolor='rgba(200,200,200,0.3)'
             ),
             angularaxis=dict(
                 tickmode='array',
                 tickvals=[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330],
                 ticktext=[''] * 12,
-                gridcolor='rgba(200,200,200,0.2)',
-                showticklabels=False,
-                rotation=0,
-                direction='clockwise'
+                gridcolor='rgba(200,200,200,0.3)',
+                showticklabels=False
             )
         ),
         showlegend=False,
         title=dict(
             text=main_title,
-            x=0.5, 
+            x=0.5,
             font=dict(size=18, color='#1F2937')
         ),
         height=700,
@@ -521,7 +465,7 @@ def create_enhanced_radar_chart(county_data, county_name, data_provider, county_
     return fig
 
 def create_detail_chart(details_df, title, comparison_mode='national'):
-    """Create enhanced detail chart with units and comparison context"""
+    """Create enhanced detail chart"""
     import plotly.graph_objects as go
     
     if details_df.empty:
@@ -532,35 +476,35 @@ def create_detail_chart(details_df, title, comparison_mode='national'):
     title_with_context = f"{title} ({comparison_label} Comparison)"
     
     # Sort by percentile rank
-    details_df = details_df.sort_values('percentile_rank', ascending=True)
+    details_df = details_df.sort_values('PERCENTILE_RANK', ascending=True)
     
     fig = go.Figure()
     
     # Create bars with color coding
     fig.add_trace(go.Bar(
-        y=details_df.get('display_name', details_df['metric_name']),
-        x=details_df['percentile_rank'],
+        y=details_df.get('DISPLAY_NAME', details_df['METRIC_NAME']),
+        x=details_df['PERCENTILE_RANK'],
         orientation='h',
         marker=dict(
-            color=details_df['percentile_rank'],
+            color=details_df['PERCENTILE_RANK'],
             colorscale='RdYlGn',
             colorbar=dict(title="Percentile"),
             cmin=0,
             cmax=100
         ),
-        text=[f"{val:.1f}" for val in details_df['percentile_rank']],
+        text=[f"{val:.1f}" for val in details_df['PERCENTILE_RANK']],
         textposition='auto',
         hovertemplate='<b>%{y}</b><br>' +
                       'Value: %{customdata[0]:.1f}<br>' +
                       'Percentile: %{x:.0f}%<br>' +
                       '<extra></extra>',
-        customdata=list(zip(details_df['metric_value']))
+        customdata=list(zip(details_df['METRIC_VALUE']))
     ))
     
     # Add reference line at 50th percentile
     fig.add_vline(
-        x=50, 
-        line_dash="dash", 
+        x=50,
+        line_dash="dash",
         line_color="gray",
         annotation_text=f"50th Percentile ({comparison_label} Avg)",
         annotation_position="top"
@@ -579,15 +523,21 @@ def create_detail_chart(details_df, title, comparison_mode='national'):
     return fig
 
 if __name__ == "__main__":
-    print("🚀 ENHANCED RADAR CHART INTEGRATION - BIGQUERY V2 STYLED")
+    print("🚀 ENHANCED RADAR CHART INTEGRATION - SNOWFLAKE VERSION")
     print("=" * 70)
     
-    # Configure BigQuery connection
-    project_id = 'county-dashboard'  # UPDATE THIS with your Google Cloud project ID
-    dataset_id = 'sustainability_data'
+    # Configure Snowflake connection
+    connection_params = {
+        'user': 'mabel10',
+        'password': 'Abvin!123456789',
+        'account': 'wthggzd-ah61676',
+        'warehouse': 'COMPUTE_WH',
+        'database': 'SUSTAINABILITY_DB',
+        'schema': 'PUBLIC'
+    }
     
     # Test the enhanced integration
-    provider = BigQueryRadarChartDataProvider(project_id, dataset_id)
+    provider = SnowflakeRadarChartDataProvider(connection_params)
     
     # Show status
     print(f"\n📊 Database Status: Stage {provider.stage}/3")
@@ -607,12 +557,12 @@ if __name__ == "__main__":
     
     if not counties.empty:
         # Test with a sample county
-        sample_fips = counties.iloc[0]['fips_code']
-        sample_state = counties.iloc[0]['state_code']
+        sample_fips = counties.iloc[0]['FIPS_CODE']
+        sample_state = counties.iloc[0]['STATE_CODE']
         county_info, structured_data = provider.get_county_metrics(sample_fips)
         
         if not county_info.empty:
-            county_name = f"{county_info.iloc[0]['county_name']}, {county_info.iloc[0]['state_code']}"
+            county_name = f"{county_info.iloc[0]['COUNTY_NAME']}, {county_info.iloc[0]['STATE_CODE']}"
             print(f"\n✅ Testing with {county_name}")
             
             # Test national comparison
@@ -630,21 +580,19 @@ if __name__ == "__main__":
             print(f"   ⏱️  Time: {national_time:.3f} seconds")
             
             # Test drill-down
-            if structured_data.get('Society'):
-                first_submeasure = list(structured_data['Society'].keys())[0]
+            if structured_data.get('People'):
+                first_submeasure = list(structured_data['People'].keys())[0]
                 print(f"\n🔍 Testing drill-down for '{first_submeasure}':")
                 
-                details = provider.get_submetric_details(sample_fips, 'Society', first_submeasure)
+                details = provider.get_submetric_details(sample_fips, 'People', first_submeasure)
                 if not details.empty:
                     print(f"   Found {len(details)} metrics")
                     for _, row in details.head(3).iterrows():
-                        display_name = row.get('display_name', row['metric_name'])
-                        print(f"   • {display_name}: {row['metric_value']:.1f} ({row['percentile_rank']:.0f}%)")
+                        display_name = row.get('DISPLAY_NAME', row['METRIC_NAME'])
+                        print(f"   • {display_name}: {row['METRIC_VALUE']:.1f} ({row['PERCENTILE_RANK']:.0f}%)")
     
     print(f"\n✨ Key Features:")
-    print(f"   • Connected to BigQuery database")
-    print(f"   • NEW LABELS: Society, Economy, Environment")
-    print(f"   • SQLite V2 visual styling (colors, radial axis)")
+    print(f"   • Connected to Snowflake database")
     print(f"   • Human-readable display names from CSV")
     print(f"   • National comparisons ready")
     print(f"   • Enhanced hover text with context")
