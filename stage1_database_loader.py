@@ -1,71 +1,96 @@
 import pandas as pd
-import sqlite3
+from google.cloud import bigquery
 import numpy as np
 import re
-from pathlib import Path
+import os
 
-class SustainabilityDataLoader:
+class BigQueryDataLoader:
     """
-    Stage 1: Load CSV data into SQLite database with proper hierarchical structure
+    Stage 1: Load CSV data directly into BigQuery with proper hierarchical structure
+    This replaces the Snowflake version and loads data directly to BigQuery
     """
-#Csv data loader and database creator- to change the csv file path to the new file path
-    def __init__(self, csv_file_path, db_file_path='sustainability_data.db'):
+    
+    def __init__(self, csv_file_path, project_id, dataset_id):
         self.csv_file_path = csv_file_path
-        self.db_file_path = db_file_path
-        self.conn = None
+        self.project_id = project_id
+        self.dataset_id = dataset_id
+        self.client = None
         
+    def connect(self):
+        """Establish connection to BigQuery"""
+        try:
+            self.client = bigquery.Client(project=self.project_id)
+            print(f"✅ Connected to BigQuery: {self.project_id}.{self.dataset_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to connect to BigQuery: {str(e)}")
+            return False
+    
     def create_database_schema(self):
-        """Create the database schema with all required tables"""
-        self.conn = sqlite3.connect(self.db_file_path)
-        cursor = self.conn.cursor()
+        """Create the dataset and tables in BigQuery"""
+        print("📋 Creating database schema in BigQuery...")
+        
+        # Create dataset if it doesn't exist
+        dataset_id = f"{self.project_id}.{self.dataset_id}"
+        dataset = bigquery.Dataset(dataset_id)
+        dataset.location = "US"  # Choose your location
+        
+        try:
+            self.client.create_dataset(dataset, exists_ok=True)
+            print(f"   ✅ Dataset {self.dataset_id} created/verified")
+        except Exception as e:
+            print(f"   ℹ️  Dataset already exists or error: {e}")
         
         # Drop existing tables if they exist (for fresh start)
-        cursor.execute('DROP TABLE IF EXISTS raw_metrics')
-        cursor.execute('DROP TABLE IF EXISTS counties')
+        tables_to_drop = ['raw_metrics', 'counties', 'raw_metrics_wide']
+        for table_name in tables_to_drop:
+            table_id = f"{self.project_id}.{self.dataset_id}.{table_name}"
+            try:
+                self.client.delete_table(table_id, not_found_ok=True)
+                print(f"   🗑️  Dropped existing table: {table_name}")
+            except:
+                pass
         
         # Create counties table
-        cursor.execute('''
-            CREATE TABLE counties (
-                fips TEXT PRIMARY KEY,
-                state TEXT NOT NULL,
-                county TEXT NOT NULL,
-                UNIQUE(fips)
-            )
-        ''')
+        counties_schema = [
+            bigquery.SchemaField("fips", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("state", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("county", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("state_code", "STRING"),
+        ]
         
-        # Create raw_metrics table to store all original data with metadata
-        cursor.execute('''
-            CREATE TABLE raw_metrics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                fips TEXT NOT NULL,
-                metric_name TEXT NOT NULL,
-                raw_value REAL,
-                raw_value_text TEXT,  -- Store original text format
-                unit TEXT,
-                year TEXT,
-                top_level TEXT NOT NULL,
-                sub_measure TEXT NOT NULL,
-                metric_group TEXT,
-                sub_metric_name TEXT,
-                is_missing INTEGER DEFAULT 0,
-                column_index INTEGER,
-                FOREIGN KEY (fips) REFERENCES counties(fips),
-                UNIQUE(fips, metric_name)
-            )
-        ''')
+        counties_table_id = f"{self.project_id}.{self.dataset_id}.counties"
+        counties_table = bigquery.Table(counties_table_id, schema=counties_schema)
+        self.client.create_table(counties_table)
+        print("   ✅ Created counties table")
         
-        # Create indexes for better query performance
-        cursor.execute('CREATE INDEX idx_raw_metrics_fips ON raw_metrics(fips)')
-        cursor.execute('CREATE INDEX idx_raw_metrics_hierarchy ON raw_metrics(top_level, sub_measure)')
-        cursor.execute('CREATE INDEX idx_raw_metrics_metric ON raw_metrics(metric_name)')
+        # Create raw_metrics table
+        metrics_schema = [
+            bigquery.SchemaField("fips", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("metric_name", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("raw_value", "FLOAT"),
+            bigquery.SchemaField("raw_value_text", "STRING"),
+            bigquery.SchemaField("unit", "STRING"),
+            bigquery.SchemaField("year", "STRING"),
+            bigquery.SchemaField("top_level", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("sub_measure", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("metric_group", "STRING"),
+            bigquery.SchemaField("sub_metric_name", "STRING"),
+            bigquery.SchemaField("is_missing", "BOOLEAN"),
+            bigquery.SchemaField("column_index", "INTEGER"),
+        ]
         
-        self.conn.commit()
-        print("✅ Database schema created successfully")
+        metrics_table_id = f"{self.project_id}.{self.dataset_id}.raw_metrics"
+        metrics_table = bigquery.Table(metrics_table_id, schema=metrics_schema)
+        self.client.create_table(metrics_table)
+        print("   ✅ Created raw_metrics table")
+        
+        print("✅ Database schema created successfully in BigQuery")
         
     def load_csv_data(self):
         """Load and parse the CSV file with multi-row headers"""
-        print("📊 Loading CSV data...")
-    # here again change the csv file path to the new file path
+        print("📊 Loading CSV data from local file...")
+        
         # Read CSV without treating first row as header
         df = pd.read_csv(self.csv_file_path, header=None, dtype=str)
         
@@ -87,6 +112,7 @@ class SustainabilityDataLoader:
     def parse_metric_hierarchy(self, column_name):
         """
         Parse hierarchical column names into components
+        Handles: PEOPLE_HEALTH_LENGTHOFLIFE_LIFEEXPECTANCY
         Returns: dict with hierarchy information
         """
         parts = column_name.split('_')
@@ -96,8 +122,8 @@ class SustainabilityDataLoader:
             
         hierarchy = {
             'original_name': column_name,
-            'top_level': parts[0],
-            'sub_measure': parts[1],
+            'top_level': parts[0].capitalize(),  # PEOPLE -> People
+            'sub_measure': parts[1].capitalize(),  # HEALTH -> Health
             'metric_group': None,
             'sub_metric_name': None,
             'full_metric_path': column_name
@@ -105,11 +131,11 @@ class SustainabilityDataLoader:
         
         if len(parts) == 2:
             # Direct sub-measure metric: People_Health
-            hierarchy['metric_group'] = parts[1]
-            hierarchy['sub_metric_name'] = parts[1]
+            hierarchy['metric_group'] = parts[1].capitalize()
+            hierarchy['sub_metric_name'] = parts[1].capitalize()
         elif len(parts) >= 3:
             # Nested metric: People_Health_LengthOfLife_LifeExpectancy
-            hierarchy['metric_group'] = parts[2]
+            hierarchy['metric_group'] = parts[2]  # LengthOfLife
             if len(parts) > 3:
                 hierarchy['sub_metric_name'] = '_'.join(parts[3:])
             else:
@@ -126,9 +152,9 @@ class SustainabilityDataLoader:
             return None, True
             
         # Convert to string and strip whitespace
-        clean_str = str(value_str).strip()
+        clean_str = str(value_str).strip().upper()
         
-        if clean_str == '' or clean_str.upper() in ['NA', 'NULL', 'NAN', 'N/A']:
+        if clean_str == '' or clean_str in ['NA', 'NULL', 'NAN', 'N/A', 'NONE']:
             return None, True
             
         # Remove common formatting characters
@@ -146,34 +172,49 @@ class SustainabilityDataLoader:
             return None, True
     
     def load_counties_data(self, data_rows):
-        """Load county information into counties table"""
-        print("🏛️  Loading counties data...")
+        """Load county information into BigQuery counties table"""
+        print("🏛️  Loading counties data into BigQuery...")
         
         counties_data = []
+        
         for idx, row in data_rows.iterrows():
-            fips = str(row.iloc[0]).strip()
+            fips_raw = str(row.iloc[0]).strip()
             state = str(row.iloc[1]).strip()
             county = str(row.iloc[2]).strip()
             
             # Skip rows with missing essential data
-            if fips and fips != 'nan' and state and state != 'nan':
-                counties_data.append((fips, state, county))
+            if fips_raw and fips_raw.upper() not in ['NAN', 'NULL', '']:
+                # Pad FIPS to 5 digits
+                fips = fips_raw.zfill(5)
+                state_code = fips[:2]
+                counties_data.append({
+                    'fips': fips,
+                    'state': state,
+                    'county': county,
+                    'state_code': state_code
+                })
         
-        # Insert into database
-        cursor = self.conn.cursor()
-        cursor.executemany('''
-            INSERT OR REPLACE INTO counties (fips, state, county) 
-            VALUES (?, ?, ?)
-        ''', counties_data)
-        
-        self.conn.commit()
-        print(f"   ✅ Loaded {len(counties_data)} counties")
+        # Load to BigQuery
+        if counties_data:
+            counties_df = pd.DataFrame(counties_data)
+            table_id = f"{self.project_id}.{self.dataset_id}.counties"
+            
+            job_config = bigquery.LoadJobConfig(
+                write_disposition="WRITE_APPEND",
+            )
+            
+            job = self.client.load_table_from_dataframe(
+                counties_df, table_id, job_config=job_config
+            )
+            job.result()  # Wait for the job to complete
+            
+            print(f"   ✅ Loaded {len(counties_data)} counties into BigQuery")
         
         return len(counties_data)
     
     def load_metrics_data(self, column_names, units, years, data_rows):
-        """Load all metrics data with hierarchical parsing"""
-        print("📈 Loading metrics data...")
+        """Load all metrics data with hierarchical parsing INTO BigQuery"""
+        print("📈 Loading metrics data into BigQuery...")
         
         # Skip the first 3 columns (FIPS, State, County)
         metric_columns = column_names[3:]
@@ -184,6 +225,8 @@ class SustainabilityDataLoader:
         skipped_columns = 0
         total_values = 0
         missing_values = 0
+        
+        print("   Processing metrics...")
         
         for col_idx, column_name in enumerate(metric_columns):
             # Parse hierarchy
@@ -199,11 +242,14 @@ class SustainabilityDataLoader:
             
             # Process each county's value for this metric
             for row_idx, row in data_rows.iterrows():
-                fips = str(row.iloc[0]).strip()
+                fips_raw = str(row.iloc[0]).strip()
                 
                 # Skip rows with invalid FIPS
-                if not fips or fips == 'nan':
+                if not fips_raw or fips_raw.upper() in ['NAN', 'NULL', '']:
                     continue
+                
+                # Pad FIPS to 5 digits
+                fips = fips_raw.zfill(5)
                     
                 # Get raw value
                 raw_value_text = str(row.iloc[col_idx + 3]) if col_idx + 3 < len(row) else ''
@@ -213,154 +259,196 @@ class SustainabilityDataLoader:
                 if is_missing:
                     missing_values += 1
                 
-                metrics_data.append((
-                    fips,
-                    hierarchy['original_name'],
-                    numeric_value,
-                    raw_value_text,
-                    unit,
-                    year,
-                    hierarchy['top_level'],
-                    hierarchy['sub_measure'],
-                    hierarchy['metric_group'],
-                    hierarchy['sub_metric_name'],
-                    1 if is_missing else 0,
-                    col_idx + 3
-                ))
+                metrics_data.append({
+                    'fips': fips,
+                    'metric_name': hierarchy['original_name'],
+                    'raw_value': numeric_value,
+                    'raw_value_text': raw_value_text[:100] if raw_value_text else None,
+                    'unit': unit[:50] if unit else None,
+                    'year': year[:20] if year else None,
+                    'top_level': hierarchy['top_level'],
+                    'sub_measure': hierarchy['sub_measure'],
+                    'metric_group': hierarchy['metric_group'],
+                    'sub_metric_name': hierarchy['sub_metric_name'],
+                    'is_missing': is_missing,
+                    'column_index': col_idx + 3
+                })
+            
+            # Print progress every 10 columns
+            if (col_idx + 1) % 10 == 0:
+                print(f"      Processed {col_idx + 1}/{len(metric_columns)} metrics...")
         
-        # Batch insert into database
-        cursor = self.conn.cursor()
-        cursor.executemany('''
-            INSERT OR REPLACE INTO raw_metrics 
-            (fips, metric_name, raw_value, raw_value_text, unit, year, 
-             top_level, sub_measure, metric_group, sub_metric_name, 
-             is_missing, column_index)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', metrics_data)
+        print(f"   Loading {len(metrics_data):,} rows into BigQuery...")
         
-        self.conn.commit()
+        # Convert to DataFrame and load to BigQuery in batches
+        metrics_df = pd.DataFrame(metrics_data)
+        table_id = f"{self.project_id}.{self.dataset_id}.raw_metrics"
         
-        print(f"   ✅ Loaded {len(metrics_data)} metric values")
+        job_config = bigquery.LoadJobConfig(
+            write_disposition="WRITE_APPEND",
+        )
+        
+        # Load in chunks for better performance
+        chunk_size = 10000
+        total_loaded = 0
+        
+        for i in range(0, len(metrics_df), chunk_size):
+            chunk = metrics_df.iloc[i:i + chunk_size]
+            job = self.client.load_table_from_dataframe(
+                chunk, table_id, job_config=job_config
+            )
+            job.result()  # Wait for completion
+            total_loaded += len(chunk)
+            print(f"      Loaded {total_loaded:,} / {len(metrics_df):,} rows...")
+        
+        print(f"   ✅ Loaded {len(metrics_data):,} metric values into BigQuery")
         print(f"   ⚠️  Skipped {skipped_columns} invalid columns")
         print(f"   📊 Data quality: {missing_values}/{total_values} missing ({missing_values/total_values*100:.1f}%)")
         
         return len(metrics_data)
     
     def generate_data_summary(self):
-        """Generate summary statistics about the loaded data"""
+        """Generate summary statistics about the loaded data FROM BigQuery"""
         print("\n📋 DATA SUMMARY:")
         print("=" * 50)
         
-        cursor = self.conn.cursor()
-        
         # County count
-        cursor.execute("SELECT COUNT(*) FROM counties")
-        county_count = cursor.fetchone()[0]
+        query = f"""
+            SELECT COUNT(*) as count 
+            FROM `{self.project_id}.{self.dataset_id}.counties`
+        """
+        county_count = self.client.query(query).to_dataframe().iloc[0]['count']
         print(f"Counties: {county_count}")
         
-#here we need to check if the top level and sub level are correct
         # Top-level measures
-        cursor.execute("""
-            SELECT top_level, COUNT(DISTINCT sub_measure) as sub_measures,
-                   COUNT(DISTINCT metric_name) as metrics
-            FROM raw_metrics 
+        query = f"""
+            SELECT 
+                top_level, 
+                COUNT(DISTINCT sub_measure) as sub_measures,
+                COUNT(DISTINCT metric_name) as metrics
+            FROM `{self.project_id}.{self.dataset_id}.raw_metrics`
             GROUP BY top_level 
             ORDER BY top_level
-        """)
+        """
         
         print("\nHierarchical Structure:")
-        for top_level, sub_count, metric_count in cursor.fetchall():
-            print(f"  {top_level}: {sub_count} sub-measures, {metric_count} metrics")
+        results = self.client.query(query).to_dataframe()
+        for _, row in results.iterrows():
+            print(f"  {row['top_level']}: {row['sub_measures']} sub-measures, {row['metrics']} metrics")
         
         # Sub-measure breakdown
-        cursor.execute("""
-            SELECT top_level, sub_measure, COUNT(DISTINCT metric_name) as metrics
-            FROM raw_metrics 
+        query = f"""
+            SELECT 
+                top_level, 
+                sub_measure, 
+                COUNT(DISTINCT metric_name) as metrics
+            FROM `{self.project_id}.{self.dataset_id}.raw_metrics`
             GROUP BY top_level, sub_measure 
             ORDER BY top_level, sub_measure
-        """)
+        """
         
         print("\nDetailed Sub-measures:")
+        results = self.client.query(query).to_dataframe()
         current_top = None
-        for top_level, sub_measure, metric_count in cursor.fetchall():
-            if current_top != top_level:
-                print(f"\n  {top_level}:")
-                current_top = top_level
-            print(f"    {sub_measure}: {metric_count} metrics")
+        for _, row in results.iterrows():
+            if current_top != row['top_level']:
+                print(f"\n  {row['top_level']}:")
+                current_top = row['top_level']
+            print(f"    {row['sub_measure']}: {row['metrics']} metrics")
         
         # Data quality
-        cursor.execute("""
+        query = f"""
             SELECT 
                 COUNT(*) as total_values,
-                SUM(is_missing) as missing_values,
+                COUNTIF(is_missing = TRUE) as missing_values,
                 COUNT(DISTINCT fips) as counties_with_data
-            FROM raw_metrics
-        """)
+            FROM `{self.project_id}.{self.dataset_id}.raw_metrics`
+        """
         
-        total, missing, counties_with_data = cursor.fetchone()
+        result = self.client.query(query).to_dataframe().iloc[0]
+        total = result['total_values']
+        missing = result['missing_values']
+        counties_with_data = result['counties_with_data']
+        
         print(f"\nData Quality:")
         print(f"  Total values: {total:,}")
         print(f"  Missing values: {missing:,} ({missing/total*100:.1f}%)")
         print(f"  Counties with data: {counties_with_data}")
         
         # Sample data
-        cursor.execute("""
+        query = f"""
             SELECT c.state, c.county, rm.metric_name, rm.raw_value, rm.unit
-            FROM raw_metrics rm
-            JOIN counties c ON rm.fips = c.fips
+            FROM `{self.project_id}.{self.dataset_id}.raw_metrics` rm
+            JOIN `{self.project_id}.{self.dataset_id}.counties` c 
+            ON rm.fips = c.fips
             WHERE rm.raw_value IS NOT NULL
             LIMIT 5
-        """)
+        """
         
         print(f"\nSample Data:")
-        for state, county, metric, value, unit in cursor.fetchall():
-            print(f"  {county}, {state}: {metric} = {value} {unit}")
+        results = self.client.query(query).to_dataframe()
+        for _, row in results.iterrows():
+            print(f"  {row['county']}, {row['state']}: {row['metric_name']} = {row['raw_value']} {row['unit']}")
     
     def run_stage1(self):
-        """Execute complete Stage 1 pipeline"""
-        print("🚀 STARTING STAGE 1: Database Creation and Data Loading")
-        print("=" * 60)
+        """Execute complete Stage 1 pipeline - Load CSV to BigQuery"""
+        print("🚀 STARTING STAGE 1: Data Loading to BigQuery")
+        print("=" * 70)
         
         try:
-            # Step 1: Create database schema
+            # Step 1: Connect to BigQuery
+            if not self.connect():
+                raise Exception("Failed to connect to BigQuery")
+            
+            # Step 2: Create database schema
             self.create_database_schema()
             
-            # Step 2: Load and parse CSV
+            # Step 3: Load and parse CSV from local file
             column_names, units, years, data_rows = self.load_csv_data()
             
-            # Step 3: Load counties
+            # Step 4: Load counties into BigQuery
             counties_loaded = self.load_counties_data(data_rows)
             
-            # Step 4: Load metrics with hierarchy
+            # Step 5: Load metrics with hierarchy into BigQuery
             metrics_loaded = self.load_metrics_data(column_names, units, years, data_rows)
             
-            # Step 5: Generate summary
+            # Step 6: Generate summary from BigQuery data
             self.generate_data_summary()
             
             print(f"\n✅ STAGE 1 COMPLETED SUCCESSFULLY!")
-            print(f"   Database: {self.db_file_path}")
+            print(f"   All data stored in BigQuery")
+            print(f"   Project: {self.project_id}")
+            print(f"   Dataset: {self.dataset_id}")
             print(f"   Counties: {counties_loaded}")
-            print(f"   Metric values: {metrics_loaded}")
+            print(f"   Metric values: {metrics_loaded:,}")
             
         except Exception as e:
             print(f"❌ ERROR in Stage 1: {str(e)}")
+            import traceback
+            traceback.print_exc()
             raise
-        finally:
-            if self.conn:
-                self.conn.close()
 
 # Usage example
 if __name__ == "__main__":
+    # BigQuery configuration
+    project_id = 'county-dashboard'  # UPDATE THIS with your Google Cloud project ID
+    dataset_id = 'sustainability_data'  # Name for your dataset in BigQuery
+    
+    # Path to your local CSV file
+    csv_file_path = './National_County_Dashboard.csv'  # Update this path
+    
     # Initialize the loader
-    loader = SustainabilityDataLoader(
-        csv_file_path='./National_County_Dashboard.csv',
-        db_file_path='sustainability_data.db'
+    loader = BigQueryDataLoader(
+        csv_file_path=csv_file_path,
+        project_id=project_id,
+        dataset_id=dataset_id
     )
     
-    # Run Stage 1
+    # Run Stage 1 - This will load CSV directly to BigQuery
     loader.run_stage1()
     
     print("\n🎯 Next Steps:")
-    print("   - Verify data quality in the database")
-    print("   - Proceed to Stage 2: Normalization pipeline")
-    print("   - Test queries for the radar chart integration")
+    print(f"   - View data in BigQuery Console: https://console.cloud.google.com/bigquery")
+    print(f"   - Query: SELECT * FROM `{project_id}.{dataset_id}.raw_metrics` LIMIT 10")
+    print(f"   - Query: SELECT * FROM `{project_id}.{dataset_id}.counties` LIMIT 10")
+    print("   - Run Stage 2: python stage2_normalization.py")
