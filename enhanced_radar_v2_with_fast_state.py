@@ -23,8 +23,52 @@ class BigQueryRadarChartDataProvider:
         self.display_names_map = {}
         self.comparison_mode = 'national'
         self.current_state = None
+                   # ✅ EXACT metric names from BigQuery database (verified to exist)
+        self.reverse_metrics = {
+                # People metrics (lower is better)
+                # Community
+                'People_Community_LongCommuteAndDrivesAlone',
+                'People_Community_ViolentCrimeRate',
+                # Health
+                'People_Health_HealthBehaviours_AdultsSmoking',
+                'People_Health_HealthBehaviours_AdultsWithObesity',
+                'People_Health_HealthBehaviours_ExcessiveDrinking',
+                'People_Health_HealthBehaviours_InsufficientSleep',
+                'People_Health_HealthBehaviours_PhysicallyInactive',
+                'People_Health_HealthResources_AccessToCare_Uninsured',
+                'People_Health_HealthResources_QualityOfCare_PreventableHospitalizationRate',
+                'People_Health_LengthOfLife_Premature Death',  # ← Note the SPACE!
+                'People_Health_QualityOfLife_AdultWithDiabetes',
+                'People_Health_QualityOfLife_FreqMenDistress',
+                'People_Health_QualityOfLife_FreqPhyDistress',
+                'People_Health_QualityOfLife_HIVPrevRate',
+                # Wealth
+                'People_Wealth_ChildPoverty',
+                'People_Wealth_IncomeRatio80by20',
+                # Place metrics (lower is better)
+                # Climateandresilience
+                'Place_ClimateAndResilience_CO2OrCapita',
+                # Landairwater
+                'Place_LandAirWater_AirQualityIndexPerPm2.5',
+                # Prosperity metrics (lower is better)
+                # Business
+                'Prosperity_Business_RatioOfEstablishmentBirthsPerDeaths2020',
+                # Employment
+                'Prosperity_Employment_UnemploymentRate',
+                # Government
+                'Prosperity_Government_DependencyRatio',
+                'Prosperity_Government_ViolentCrimeRate',
+                # Nonprofit
+                'Prosperity_Nonprofit_WageRatio',
+            }           
+        
         self._load_display_names()
         self._check_database_status()
+    def is_reverse_metric(self, metric_name):
+        """
+        Check if a metric should be reversed (lower is better)
+        """
+        return metric_name in self.reverse_metrics
     
     def _load_display_names(self):
         """Load human-readable display names from CSV"""
@@ -299,14 +343,21 @@ class BigQueryRadarChartDataProvider:
             # Add human-readable display names
             if not details_df.empty:
                 display_names = []
+                reverse_flags = []  # ✅ NEW: Build our own reverse flags
+                
                 for _, row in details_df.iterrows():
                     display_name = self.get_display_name(row['metric_name'])
                     if display_name == row['metric_name'] and row.get('sub_metric_name'):
                         display_name = row['sub_metric_name'].replace('_', ' ').title()
                     display_names.append(display_name)
+                    
+                    # ✅ NEW: Use OUR reverse metrics set, not the database!
+                    is_reverse = self.is_reverse_metric(row['metric_name'])
+                    reverse_flags.append(is_reverse)
                 
                 details_df['display_name'] = display_names
-            
+                details_df['is_reverse_metric'] = reverse_flags  # ✅ OVERRIDE database flag!
+
             return details_df
             
         except Exception as e:
@@ -586,42 +637,60 @@ def create_enhanced_radar_chart(county_data, county_name, data_provider, county_
 
 
 def create_detail_chart(details_df, title, comparison_mode='national'):
-    """Create enhanced detail chart with units and comparison context"""
+    """Create enhanced detail chart with REVERSE METRIC HANDLING"""
     import plotly.graph_objects as go
     
     if details_df.empty:
         return go.Figure()
     
+    # ✅ APPLY REVERSE LOGIC BEFORE creating chart
+    display_percentiles = []
+    for _, row in details_df.iterrows():
+        percentile = row['percentile_rank']
+        is_reverse = row.get('is_reverse_metric', False)
+        
+        if is_reverse:
+            # REVERSE IT! Lower percentile = Better performance
+            display_percentile = 100 - percentile
+        else:
+            display_percentile = percentile
+        
+        display_percentiles.append(display_percentile)
+    
+    details_df['display_percentile'] = display_percentiles
+    
     # Add comparison context to title
     comparison_label = "National" if comparison_mode == 'national' else "State"
     title_with_context = f"{title} ({comparison_label} Comparison)"
     
-    # Sort by percentile rank
-    details_df = details_df.sort_values('percentile_rank', ascending=True)
+    # Sort by DISPLAY percentile (not raw percentile!)
+    details_df = details_df.sort_values('display_percentile', ascending=True)
     
     fig = go.Figure()
     
-    # Create bars with color coding
+    # Create bars with color coding based on DISPLAY percentile
     fig.add_trace(go.Bar(
         y=details_df.get('display_name', details_df['metric_name']),
-        x=details_df['percentile_rank'],
+        x=details_df['display_percentile'],  # ✅ Use display_percentile!
         orientation='h',
         marker=dict(
-            color=details_df['percentile_rank'],
+            color=details_df['display_percentile'],  # ✅ Use display_percentile!
             colorscale='RdYlGn',
             colorbar=dict(title="Percentile"),
             cmin=0,
             cmax=100
         ),
-        text=[f"{val:.1f}" for val in details_df['percentile_rank']],
+        text=[f"{val:.1f}%" for val in details_df['display_percentile']],  # ✅ Use display_percentile!
         textposition='auto',
         hovertemplate='<b>%{y}</b><br>' +
                       'Value: %{customdata[0]:.1f} %{customdata[1]}<br>' +
-                      'Percentile: %{x:.0f}%<br>' +
+                      'Display Percentile: %{x:.0f}%<br>' +
+                      'Reversed: %{customdata[2]}<br>' +
                       '<extra></extra>',
         customdata=list(zip(
             details_df['metric_value'],
-            details_df.get('unit', [''] * len(details_df))
+            details_df.get('unit', [''] * len(details_df)),
+            details_df.get('is_reverse_metric', [False] * len(details_df))
         ))
     ))
     
