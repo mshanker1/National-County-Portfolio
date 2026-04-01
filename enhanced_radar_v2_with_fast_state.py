@@ -593,26 +593,28 @@ def create_enhanced_radar_chart(county_data, county_name, data_provider, county_
     if data_provider.comparison_mode == 'state':
         speed_indicator = " ⚡" if data_provider.stage >= 3 else " ⏳"
     
-    svg_indicator = " 🎨" if svg_loaded else ""
-    main_title = f"<b>{county_name} Sustainability Dashboard</b><br><sub>Percentile Rankings vs. {comparison_context}{speed_indicator}{svg_indicator} • Click sub-measures for details</sub>"
-    
+    # Title removed - now handled by dashboard header
+
     fig.update_layout(
         polar=dict(
             bgcolor='rgba(255,255,255,0)' if svg_loaded else 'white',
             radialaxis=dict(
-                visible=False,  # Hide for clean look 
+                visible=True,  # Keep axis visible for grid lines
                 range=[0, 150],  # Extended range to push points outward
                 angle=90,
-                tickfont=dict(size=12, color='#374151'),
+                showticklabels=False,  # Hide the tick labels (90, 75, etc.)
+                tickfont=dict(size=1, color='rgba(0,0,0,0)'),  # Transparent and tiny
                 gridcolor='rgba(200,200,200,0.2)',
-                tickmode='array',
-                tickvals=[0, 10, 25, 50, 75, 100],
-                ticktext=['0', '10', '25', '50', '75', '100']
+                tickmode='linear',
+                tick0=0,
+                dtick=25,
+                showline=False,  # Hide the radial axis line
+                ticks=''  # Remove tick marks
             ),
             angularaxis=dict(
                 tickmode='array',
-                tickvals=[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330],
-                ticktext=[''] * 12,
+                tickvals=all_theta,  # Use actual data angles for precise alignment
+                ticktext=[''] * len(all_theta),
                 gridcolor='rgba(200,200,200,0.2)',
                 showticklabels=False,
                 rotation=0,
@@ -620,44 +622,28 @@ def create_enhanced_radar_chart(county_data, county_name, data_provider, county_
             )
         ),
         showlegend=False,
-        title=dict(
-            text=main_title,
-            x=0.5, 
-            font=dict(size=18, color='#1F2937')
-        ),
         height=800,
-        width=800,
-        margin=dict(t=120, b=100, l=100, r=100),
+        margin=dict(t=20, b=20, l=20, r=20),  # Minimal margins since header is external
         paper_bgcolor='rgba(255,255,255,0)' if svg_loaded else 'white',
         plot_bgcolor='rgba(255,255,255,0)' if svg_loaded else 'white',
-        autosize=False
+        autosize=True  # Allow responsive sizing
     )
     
     return fig
 
 
 def create_detail_chart(details_df, title, comparison_mode='national'):
-    """Create enhanced detail chart with REVERSE METRIC HANDLING"""
+    """Create enhanced detail chart - percentiles already reversed by data provider"""
     import plotly.graph_objects as go
-    
+
     if details_df.empty:
         return go.Figure()
-    
-    # ✅ APPLY REVERSE LOGIC BEFORE creating chart
-    display_percentiles = []
-    for _, row in details_df.iterrows():
-        percentile = row['percentile_rank']
-        is_reverse = row.get('is_reverse_metric', False)
-        
-        if is_reverse:
-            # REVERSE IT! Lower percentile = Better performance
-            display_percentile = 100 - percentile
-        else:
-            display_percentile = percentile
-        
-        display_percentiles.append(display_percentile)
-    
-    details_df['display_percentile'] = display_percentiles
+
+    # NOTE: The data provider (both BigQuery and Local) already applies
+    # the reversal logic (100 - percentile) for reverse metrics.
+    # DO NOT reverse again here or it will double-reverse!
+    # Just use the percentile_rank as-is.
+    details_df['display_percentile'] = details_df['percentile_rank']
     
     # Add comparison context to title
     comparison_label = "National" if comparison_mode == 'national' else "State"

@@ -1,0 +1,42 @@
+/* Hide radial axis tick labels on polar/radar charts */
+/* This targets the text elements that show percentile values on the radial axis */
+.polar .radialaxis text {
+    display: none !important;
+}
+
+/* Alternative: make them transparent if display:none doesn't work */
+g.radialaxis > g.xtick > text,
+g.radialaxis text {
+    opacity: 0 !important;
+    visibility: hidden !important;
+}
+
+/* Keep the data point labels visible */
+.scatterpolar text {
+    display: block !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Clip overflow on the radar chart to hide external tick labels */
+#radar-chart {
+    overflow: hidden !important;
+}
+
+#radar-chart > div {
+    overflow: hidden !important;
+}
+
+/* Target the SVG container and clip it */
+#radar-chart svg {
+    overflow: hidden !important;
+}
+
+/* More specific: hide all radial axis ticks completely */
+.polar-subplot .radialaxis .xtick text,
+.polar .radial-axis-text,
+g.angularaxis + g text,
+.radialgrid + g text {
+    display: none !important;
+    opacity: 0 !important;
+}

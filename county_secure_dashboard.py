@@ -3183,10 +3183,30 @@ MASTER_PASSWORD = 'county_dashboard_2024'
 
 # Initialize the Dash app
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
-app.title = "County Sustainability Dashboard - Secure Access"
+app.title = "County Sustainability Portfolio - Secure Access"
 
 # Initialize the enhanced data provider
-if ENHANCED_V2_AVAILABLE:
+# Set DATA_SOURCE=local to run without BigQuery (reads CSV files directly).
+# Set DATA_SOURCE=bigquery (or omit) to use the normal BigQuery backend.
+DATA_SOURCE = os.environ.get('DATA_SOURCE', 'bigquery').lower()
+
+if DATA_SOURCE == 'local':
+    try:
+        from local_data_provider import LocalCSVRadarChartDataProvider
+        provider = LocalCSVRadarChartDataProvider(
+            csv_file='National_County_Dashboard.csv',
+            county_key_file='County-Key.csv',
+            display_names_file='display_names.csv'
+        )
+        ENHANCED_V2_AVAILABLE = True
+        print(f"✅ Local CSV data provider initialized (Stage {provider.stage}/3)")
+        print(f"📝 Display names: {len(provider.display_names_map)} mappings loaded")
+    except Exception as e:
+        print(f"❌ Local CSV provider failed to initialize: {e}")
+        provider = None
+        ENHANCED_V2_AVAILABLE = False
+
+elif ENHANCED_V2_AVAILABLE:
     try:
         provider = BigQueryRadarChartDataProvider(
             PROJECT_ID,
@@ -3287,65 +3307,67 @@ def create_dashboard_layout(county_fips, county_info, structured_data):
     initial_radar_fig = create_enhanced_radar_chart(structured_data, county_name, provider, county_fips)
     
     return html.Div([
-        # Header - UPDATED
+        # Main container with relative positioning for controls
         html.Div([
+            # Chart header
             html.Div([
-                html.H1(f"{county_name} Sustainability Dashboard", 
-                        className="text-3xl font-bold text-gray-800"),
+                # Line 1: Main title
+                html.H1("Community Asset Portfolio",
+                        className="text-2xl font-bold text-gray-800 text-center mb-2"),
+
+                # Line 2: County Name, State
                 html.Div([
-                    html.Span("Population: ", className="text-lg text-gray-600 font-medium"),
-                    html.Span(f"{population:,}" if population else "N/A", 
-                             className="text-lg text-gray-800 font-bold")
-                ], className="mt-2") if population else html.Div()
-            ], className="text-center")
-        ], className="bg-white p-6 rounded-lg shadow-md mb-6"),
-        
-        # Main content
-        html.Div([
-            # Radar chart section
+                    html.Span(f"{county_info.iloc[0]['county_name']} County, {county_info.iloc[0]['state_code']}",
+                             className="text-xl font-semibold text-gray-700")
+                ], className="text-center mb-2"),
+
+                # Line 3: Population and Rank
+                html.Div([
+                    html.Span(id='rank-display')
+                ], className="text-center text-sm mb-2"),
+
+                # Line 4: Summary values for People, Prosperity, Place
+                html.Div(id='summary-stats-inline', className="text-center text-sm mb-2"),
+
+                # Line 5: Comparison context (percentile rankings statement)
+                html.Div(id='comparison-context',
+                        className="text-center text-xs text-gray-600 mb-4",
+                        children="Percentile Rankings vs. All U.S. Counties • Click Sub-Measures for Details")
+            ]),
+
+            # Radar chart container
             html.Div([
                 dcc.Graph(
                     id='radar-chart',
                     figure=initial_radar_fig,
-                    style={'height': '700px'}
+                    config={'responsive': True},
+                    style={'height': '800px', 'width': '100%'}
                 )
-            ], className="bg-white p-6 rounded-lg shadow-md", style={'width': '65%'}),
-            
-            # Summary section
+            ], style={'position': 'relative', 'overflow': 'hidden'}),
+
+            # Bottom-right toggle overlay
             html.Div([
-                html.Div([
-                    html.H3("Quick Stats", className="text-lg font-semibold mb-4"),
-                    html.Div(id='summary-stats')
-                ], className="bg-white p-4 rounded-lg shadow-md mb-4"),
-                
-                html.Div([
-                    html.H3("Comparison Mode", className="text-lg font-semibold mb-4"),
-                    html.Div([
-                        html.Button(
-                            "National Comparison", 
-                            id='national-mode-btn',
-                            className="w-full mb-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-                        ),
-                        html.Button(
-                            "Compare with State", 
-                            id='state-mode-btn',
-                            className="w-full mb-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-                        ),
-                        html.Div(id='comparison-status', className="text-xs text-gray-600 mt-2")
-                    ])
-                ], className="bg-white p-4 rounded-lg shadow-md mb-4"),
-                
-                html.Div([
-                    html.H3("Instructions", className="text-lg font-semibold mb-4"),
-                    html.Ul([
-                        html.Li("Click on radar chart points to see detailed metrics"),
-                        html.Li("People (Purple), Prosperity (Yellow), Place (Green)"),
-                        html.Li("Switch between National and State comparisons"),
-                        html.Li("Hover for detailed information")
-                    ], className="text-sm text-gray-600 space-y-1 list-disc list-inside")
-                ], className="bg-white p-4 rounded-lg shadow-md")
-            ], style={'width': '33%', 'marginLeft': '2%'})
-        ], className="flex"),
+                html.Button(
+                    "State",
+                    id='state-mode-btn',
+                    className="px-4 py-2 text-sm font-medium rounded-l border-2 border-green-600"
+                ),
+                html.Button(
+                    "National",
+                    id='national-mode-btn',
+                    className="px-4 py-2 text-sm font-medium rounded-r border-2 border-blue-600"
+                )
+            ], style={
+                'position': 'absolute',
+                'bottom': '20px',
+                'right': '20px',
+                'display': 'flex',
+                'backgroundColor': 'white',
+                'borderRadius': '6px',
+                'boxShadow': '0 2px 8px rgba(0,0,0,0.15)',
+                'zIndex': '1000'
+            })
+        ], className="bg-white p-6 rounded-lg shadow-md", style={'position': 'relative'}),
         
         # Detail section
         html.Div([
@@ -3362,7 +3384,7 @@ def create_dashboard_layout(county_fips, county_info, structured_data):
             'state_code': county_info.iloc[0]['state_code'],
             'fips': county_fips
         }),
-        dcc.Store(id='comparison-mode-store', data='national'),
+        dcc.Store(id='comparison-mode-store', data='state'),
         dcc.Store(id='authentication-store', data={'authenticated': True, 'county_fips': county_fips}),
         dcc.Store(id='population-store', data=population)
         
@@ -3403,7 +3425,9 @@ def authenticate_and_display(url_search):
             return create_access_denied_layout(f"No data found for county {county_fips}")
         
         if ENHANCED_V2_AVAILABLE and provider:
-            provider.set_comparison_mode('national')
+            # Get state code for initial state comparison mode
+            state_code = county_info.iloc[0]['state_code']
+            provider.set_comparison_mode('state', state_code)
         
         print(f"✅ Authenticated access for county {county_fips}")
         return create_dashboard_layout(county_fips, county_info, structured_data)
@@ -3470,63 +3494,193 @@ def update_radar_chart(county_data, county_info, auth_data):
     county_fips = county_info['fips']
     return create_enhanced_radar_chart(county_data, county_name, provider, county_fips)
 
-# Update comparison mode
+# Update comparison mode and button styles
 @app.callback(
     Output('comparison-mode-store', 'data'),
+    Output('national-mode-btn', 'style'),
+    Output('state-mode-btn', 'style'),
     [Input('national-mode-btn', 'n_clicks'),
      Input('state-mode-btn', 'n_clicks')],
     [State('comparison-mode-store', 'data')]
 )
 def update_comparison_mode(national_clicks, state_clicks, current_mode):
-    """Update comparison mode"""
+    """Update comparison mode and button styles"""
     import dash
     ctx = dash.callback_context
-    if not ctx.triggered:
-        return current_mode
-    
-    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    
-    if button_id == 'national-mode-btn':
-        return 'national'
-    elif button_id == 'state-mode-btn':
-        return 'state'
-    
-    return current_mode
+
+    # Determine which mode should be active
+    if ctx.triggered:
+        button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+        if button_id == 'national-mode-btn':
+            current_mode = 'national'
+        elif button_id == 'state-mode-btn':
+            current_mode = 'state'
+
+    # Default to state if no mode set
+    if not current_mode:
+        current_mode = 'state'
+
+    # Define button styles based on active mode
+    if current_mode == 'national':
+        national_style = {
+            'backgroundColor': '#2563eb',  # blue-600
+            'color': 'white',
+            'borderColor': '#2563eb'
+        }
+        state_style = {
+            'backgroundColor': 'white',
+            'color': '#16a34a',  # green-600
+            'borderColor': '#16a34a'
+        }
+    else:  # state mode
+        national_style = {
+            'backgroundColor': 'white',
+            'color': '#2563eb',  # blue-600
+            'borderColor': '#2563eb'
+        }
+        state_style = {
+            'backgroundColor': '#16a34a',  # green-600
+            'color': 'white',
+            'borderColor': '#16a34a'
+        }
+
+    return current_mode, national_style, state_style
 
 # Update summary stats
 @app.callback(
-    Output('summary-stats', 'children'),
+    Output('summary-stats-inline', 'children'),
+    Output('comparison-context', 'children'),
     [Input('county-data-store', 'data'),
-     Input('comparison-mode-store', 'data')]
+     Input('comparison-mode-store', 'data'),
+     Input('selected-county-info', 'data')]
 )
-def update_summary_stats(county_data, comparison_mode):
-    """Update summary stats"""
+def update_summary_stats_inline(county_data, comparison_mode, county_info):
+    """Update inline summary stats and comparison context"""
     if not county_data:
-        return "No data available"
-    
+        return "No data available", "Percentile Rankings • Click Sub-Measures for Details"
+
     category_colors = {
         'People': '#5760a6',
         'Prosperity': '#c0b265',
         'Place': '#588f57'
     }
-    
-    stats_items = []
+
+    # Calculate average scores for each category
+    stats_components = []
     for category in ['People', 'Prosperity', 'Place']:
         if category in county_data and county_data[category]:
             subcats = county_data[category]
             avg_score = round(sum(subcats.values()) / len(subcats), 1)
             color = category_colors[category]
-            
-            stats_items.append(
-                html.Div([
-                    html.Div([
-                        html.Span(category.upper(), className="font-medium text-white text-sm"),
-                    ], className="px-3 py-1 rounded", style={'backgroundColor': color}),
-                    html.Span(f"{avg_score}%", className="text-lg font-bold", style={'color': color})
-                ], className="flex justify-between items-center p-3 bg-gray-50 rounded mb-2")
+
+            stats_components.append(
+                html.Span([
+                    html.Span(f"{category}: ", className="font-medium text-gray-600"),
+                    html.Span(f"{avg_score}", className="font-bold", style={'color': color})
+                ], className="mr-4")
             )
-    
-    return stats_items
+
+    # Update comparison context text
+    if comparison_mode == 'state' and county_info:
+        # Get county count for the state
+        try:
+            all_counties = get_all_counties()
+            state_code = county_info.get('state_code')
+            state_counties = all_counties[all_counties['state_code'] == state_code]
+            total_in_state = len(state_counties)
+
+            # Get full state name if available
+            if not state_counties.empty and 'state_name' in state_counties.columns:
+                state_name = state_counties.iloc[0]['state_name']
+            else:
+                state_name = state_code
+
+            context_text = f"Percentile Rankings vs. {total_in_state} {state_name} Counties • Click Sub-Measures for Details"
+        except Exception as e:
+            print(f"Error getting county count: {e}")
+            state_name = county_info.get('state_code', 'State')
+            context_text = f"Percentile Rankings vs. {state_name} Counties • Click Sub-Measures for Details"
+    else:
+        context_text = "Percentile Rankings vs. All U.S. Counties • Click Sub-Measures for Details"
+
+    return stats_components, context_text
+
+# Update rank display
+@app.callback(
+    Output('rank-display', 'children'),
+    [Input('selected-county-info', 'data'),
+     Input('county-data-store', 'data'),
+     Input('comparison-mode-store', 'data')]
+)
+def update_rank_display(county_info, county_data, comparison_mode):
+    """Update county rank display based on population size (state or national)"""
+    if not county_info or not county_data:
+        return ""
+
+    try:
+        # Get all counties
+        all_counties = get_all_counties()
+        if all_counties.empty:
+            return ""
+
+        county_fips = county_info.get('fips')
+        state_code = county_info.get('state_code')
+
+        # Determine which counties to compare against based on mode
+        if comparison_mode == 'state':
+            # State comparison - compare only within state
+            comparison_counties = all_counties[all_counties['state_code'] == state_code]
+            scope_label = "counties"
+        else:
+            # National comparison - compare against all counties
+            comparison_counties = all_counties
+            scope_label = "counties"
+
+        if comparison_counties.empty:
+            return ""
+
+        total_counties = len(comparison_counties)
+
+        # Get population for all counties in comparison set
+        county_populations = []
+
+        for _, county_row in comparison_counties.iterrows():
+            fips = county_row['fips_code']
+
+            # Get population using the provider's method
+            if ENHANCED_V2_AVAILABLE and provider:
+                population = provider.get_county_population(fips)
+                if population is not None and population > 0:
+                    county_populations.append({
+                        'fips': fips,
+                        'population': population
+                    })
+
+        # Sort by population (descending - largest population = rank 1)
+        county_populations.sort(key=lambda x: x['population'], reverse=True)
+
+        # Find rank and population of current county
+        rank = None
+        current_population = None
+        for i, county in enumerate(county_populations):
+            if county['fips'] == county_fips:
+                rank = i + 1
+                current_population = county['population']
+                break
+
+        if rank and current_population:
+            # Format population with commas
+            pop_formatted = f"{int(current_population):,}"
+            return html.Span([
+                html.Span("Population: ", className="font-medium text-gray-600"),
+                html.Span(f"{pop_formatted} ({rank} of {total_counties} {scope_label})", className="font-bold text-gray-800")
+            ])
+        else:
+            return ""
+
+    except Exception as e:
+        print(f"Error calculating rank: {e}")
+        return ""
 
 # Handle radar chart clicks
 @app.callback(
@@ -3587,20 +3741,32 @@ app.index_string = '''
 server = app.server
 
 if __name__ == '__main__':
-    print("\n🔒 SECURE COUNTY SUSTAINABILITY DASHBOARD - BIGQUERY VERSION")
-    print("=" * 70)
-    
-    if ENHANCED_V2_AVAILABLE and provider:
-        print(f"✅ Connected to BigQuery (Stage {provider.stage}/3)")
-        print(f"   Project: {PROJECT_ID}")
-        print(f"   Dataset: {DATASET_ID}")
+    if DATA_SOURCE == 'local':
+        print("\n🗂️  SECURE COUNTY SUSTAINABILITY PORTFOLIO - LOCAL CSV MODE")
     else:
-        print("❌ BigQuery connection failed")
-    
+        print("\n🔒 SECURE COUNTY SUSTAINABILITY PORTFOLIO - BIGQUERY MODE")
+    print("=" * 70)
+
+    if ENHANCED_V2_AVAILABLE and provider:
+        if DATA_SOURCE == 'local':
+            print(f"✅ Local CSV provider ready (Stage {provider.stage}/3)")
+            print(f"   Data file: National_County_Dashboard.csv")
+        else:
+            print(f"✅ Connected to BigQuery (Stage {provider.stage}/3)")
+            print(f"   Project: {PROJECT_ID}")
+            print(f"   Dataset: {DATASET_ID}")
+    else:
+        if DATA_SOURCE == 'local':
+            print("❌ Local CSV provider failed to load — check that")
+            print("   National_County_Dashboard.csv is in the working directory")
+        else:
+            print("❌ BigQuery connection failed")
+
     print(f"\n📋 Access URL Format:")
     print(f"   http://localhost:8050/?county=01001&key=autauga2024")
-    
-    print(f"\n🌐 Starting secure dashboard on http://localhost:8050")
+    print(f"   (master password: http://localhost:8050/?county=01001&key=county_dashboard_2024)")
+
+    print(f"\n🌐 Starting secure portfolio on http://localhost:8050")
     print("=" * 70)
-    
+
     app.run(debug=True, host='0.0.0.0', port=8050)

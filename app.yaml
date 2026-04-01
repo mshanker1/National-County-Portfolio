@@ -3,12 +3,12 @@ entrypoint: gunicorn -b :$PORT county_secure_dashboard:server
 instance_class: F2
 
 env_variables:
-  SNOWFLAKE_USER: 'mabel10'
-  SNOWFLAKE_PASSWORD: 'Abvin!123456789'
-  SNOWFLAKE_ACCOUNT: 'wthggzd-ah61676'
-  SNOWFLAKE_WAREHOUSE: 'COMPUTE_WH'
-  SNOWFLAKE_DATABASE: 'SUSTAINABILITY_DB'
-  SNOWFLAKE_SCHEMA: 'PUBLIC'
+  # BigQuery Configuration
+  # Note: App Engine uses Application Default Credentials automatically
+  # No need to set credentials explicitly - the service account handles auth
+  GCP_PROJECT_ID: 'your-project-id'  # Replace with your GCP project ID
+  BIGQUERY_DATASET: 'your-dataset-name'  # Replace with your BigQuery dataset name
+  DATA_SOURCE: 'bigquery'  # Use 'bigquery' for cloud, 'local' for CSV-based testing
 
 automatic_scaling:
   target_cpu_utilization: 0.65
